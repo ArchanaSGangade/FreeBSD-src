@@ -3,7 +3,7 @@
 nooptions	KDB_TRACE
 options		DDB
 
-ident		MyFirewall
+ident		DefenseBolt
 
 nooptions	MAC		# TrustedBSD MAC Framework
 nooptions	COMPAT_FREEBSD4	# Compatible with FreeBSD4
