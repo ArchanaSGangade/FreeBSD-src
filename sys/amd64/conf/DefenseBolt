@@ -1,4 +1,4 @@
-111include		GENERIC
+include		GENERIC
 
 nooptions	KDB_TRACE
 options		DDB
