@@ -96,7 +96,7 @@ IDTVEC(vec_name) ;							\
 	call	lapic_handle_intr ;					\
 3: ;									\
 	MEXITCOUNT ;							\
-	jmp	doreti
+	jmp	doreti							\
 
 /*
  * Handle "spurious INTerrupts".
