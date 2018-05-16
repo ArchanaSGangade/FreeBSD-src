@@ -323,11 +323,6 @@ cpu_startup(dummy)
 
 	cpu_setregs();
 }
-void
-identifycpu()
-{
-	
-}
 /*
  * Send an interrupt to process.
  *
