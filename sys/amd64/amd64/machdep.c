@@ -153,7 +153,7 @@ extern u_int64_t hammer_time(u_int64_t, u_int64_t);
 
 #define	CS_SECURE(cs)		(ISPL(cs) == SEL_UPL)
 #define	EFL_SECURE(ef, oef)	((((ef) ^ (oef)) & ~PSL_USERCHANGE) == 0)
-
+void	identifycpu(void);
 static void cpu_startup(void *);
 static void get_fpcontext(struct thread *td, mcontext_t *mcp,
     char *xfpusave, size_t xfpusave_len);
@@ -241,7 +241,7 @@ cpu_startup(dummy)
 {
 	uintmax_t memsize;
 	char *sysenv;
-	identify_cpu();
+	
 	/*
 	 * On MacBooks, we need to disallow the legacy USB circuit to
 	 * generate an SMI# because this can cause several problems,
