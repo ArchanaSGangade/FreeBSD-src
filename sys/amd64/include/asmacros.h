@@ -165,6 +165,24 @@
 #define	IDTVEC(name)	ALIGN_TEXT; .globl __CONCAT(X,name); \
 			.type __CONCAT(X,name),@function; __CONCAT(X,name):
 
+/*
+ * Macros to create and destroy a trap frame.
+ */
+#define	PUSH_FRAME							\
+	pushl	$0 ;		/* dummy error code */			\
+	pushl	$0 ;		/* dummy trap type */			\
+	pushal ;		/* 8 ints */				\
+	pushl	%ds ;		/* save data and extra segments ... */	\
+	pushl	%es ;							\
+	pushl	%fs
+	
+#define	POP_FRAME							\
+	popl	%fs ;							\
+	popl	%es ;							\
+	popl	%ds ;							\
+	popal ;								\
+	addl	$4+4,%esp
+	
 	.macro	SAVE_SEGS
 	movw	%fs,TF_FS(%rsp)
 	movw	%gs,TF_GS(%rsp)
