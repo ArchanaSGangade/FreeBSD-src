@@ -241,7 +241,7 @@ cpu_startup(dummy)
 {
 	uintmax_t memsize;
 	char *sysenv;
-
+	identify_cpu();
 	/*
 	 * On MacBooks, we need to disallow the legacy USB circuit to
 	 * generate an SMI# because this can cause several problems,
