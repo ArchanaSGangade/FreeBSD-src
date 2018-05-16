@@ -86,7 +86,9 @@ struct pcb {
 #define	PCB_FPUNOSAVE	0x80	/* no save area for current FPU ctx */
 
 	uint16_t	pcb_initial_fpucw;
-
+	
+	uint64_t	pcb_saved_ucr3;
+	
 	/* copyin/out fault recovery */
 	caddr_t		pcb_onfault;
 
