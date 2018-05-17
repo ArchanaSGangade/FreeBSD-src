@@ -74,6 +74,10 @@
 
 #ifdef _KERNEL
 
+#define	LOCK_DEBUG	1
+#else
+#define	LOCK_DEBUG	0
+#endif
 #define	rw_recurse	lock_object.lo_data
 
 /* Very simple operations on rw_lock. */
