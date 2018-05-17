@@ -302,10 +302,10 @@ struct accept_filter_arg {
  * Structure used by kernel to store most
  * addresses.
  */
-struct sockaddr {
-	unsigned char	ifa_ifp;	
+struct sockaddr {	
 	unsigned char	sa_len;		/* total length */
 	sa_family_t	sa_family;	/* address family */
+	unsigned short  sa_family;
 	char		sa_data[14];	/* actually longer; address value */
 };
 #if __BSD_VISIBLE
