@@ -303,7 +303,7 @@ struct accept_filter_arg {
  * addresses.
  */
 struct sockaddr {
-	char		ifa_ifp;	
+	int		ifa_ifp;	
 	unsigned char	sa_len;		/* total length */
 	sa_family_t	sa_family;	/* address family */
 	char		sa_data[14];	/* actually longer; address value */
