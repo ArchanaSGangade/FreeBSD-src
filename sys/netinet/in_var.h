@@ -47,10 +47,8 @@ struct	in_aliasreq {
 
 #ifdef _KERNEL
 #include <sys/queue.h>
-#include <sys/socket.h>
 #include <sys/fnv_hash.h>
 #include <sys/tree.h>
-#include <sys/libkern.h>
 
 struct igmp_ifsoftc;
 struct in_multi;
@@ -72,7 +70,7 @@ struct in_ifinfo {
  * of the structure and is assumed to be first.
  */
 struct in_ifaddr {
-	struct	ifaddr ia_ifa;		/* protocol-independent info */
+	struct	sockaddr ia_ifa;		/* protocol-independent info */
 #define	ia_ifp		ia_ifa.ifa_ifp
 #define ia_flags	ia_ifa.ifa_flags
 					/* ia_subnet{,mask} in host order */
