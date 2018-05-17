@@ -1580,7 +1580,7 @@ rtrequest1_fib(int req, struct rt_addrinfo *info, struct rtentry **ret_nrt,
 	struct radix_node *rn;
 	struct rib_head *rnh;
 	struct ifaddr *ifa;
-	struct sockaddr *ndst;
+	struct sockaddr *ndst, *ifa_ifp;
 	struct sockaddr_storage mdst;
 
 	KASSERT((fibnum < rt_numfibs), ("rtrequest1_fib: bad fibnum"));
