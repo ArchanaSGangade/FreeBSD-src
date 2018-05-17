@@ -47,6 +47,7 @@ struct	in_aliasreq {
 
 #ifdef _KERNEL
 #include <sys/queue.h>
+#include <sys/socket.h>
 #include <sys/fnv_hash.h>
 #include <sys/tree.h>
 #include <sys/libkern.h>
