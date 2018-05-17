@@ -304,7 +304,7 @@ struct accept_filter_arg {
  */
 struct sockaddr {	
 	unsigned char	sa_len;		/* total length */
-	unsigned short  sa_family;
+	sa_family_t	sa_family;	/* address family */
 	char		sa_data[14];	/* actually longer; address value */
 };
 #if __BSD_VISIBLE
