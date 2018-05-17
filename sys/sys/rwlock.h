@@ -74,10 +74,13 @@
 
 #ifdef _KERNEL
 
+#if defined(KLD_MODULE) || defined(WITNESS) || defined(INVARIANTS) || \
+    defined(INVARIANT_SUPPORT) || defined(LOCK_PROFILING) || defined(KTR)
 #define	LOCK_DEBUG	1
 #else
 #define	LOCK_DEBUG	0
 #endif
+
 #define	rw_recurse	lock_object.lo_data
 
 /* Very simple operations on rw_lock. */
