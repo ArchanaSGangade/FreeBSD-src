@@ -172,6 +172,10 @@ void	thread_lock_flags_(struct thread *, int, const char *, int);
 #define	_mtx_unlock_spin_flags(m, o, f, l)				\
 	__mtx_unlock_spin_flags(&(m)->mtx_lock, o, f, l)
 #if defined(INVARIANTS) || defined(INVARIANT_SUPPORT)
+void	__mtx_assert(const volatile uintptr_t *c, int what, const char *file,
+	    int line);
+#endif
+#if defined(INVARIANTS) || defined(INVARIANT_SUPPORT)
 #define	_mtx_assert(m, w, f, l)						\
 	__mtx_assert(&(m)->mtx_lock, w, f, l)
 #endif
