@@ -45,7 +45,10 @@
 #include <sys/queue.h>
 #include <sys/stdint.h>		/* for people using printf mainly */
 
+__NULLABILITY_PRAGMA_PUSH
+
 extern int cold;		/* nonzero if we are doing a cold boot */
+extern int suspend_blocked;	/* block suspend due to pending shutdown */
 extern int rebooting;		/* kern_reboot() has been called. */
 extern const char *panicstr;	/* panic message */
 extern char version[];		/* system version */
@@ -73,21 +76,21 @@ extern int vm_guest;		/* Running as virtual machine guest? */
  * Keep in sync with vm_guest_sysctl_names[].
  */
 enum VM_GUEST { VM_GUEST_NO = 0, VM_GUEST_VM, VM_GUEST_XEN, VM_GUEST_HV,
-		VM_LAST };
+		VM_GUEST_VMWARE, VM_GUEST_KVM, VM_LAST };
 
-#if defined(WITNESS) || defined(INVARIANTS)
+#if defined(WITNESS) || defined(INVARIANT_SUPPORT)
 void	kassert_panic(const char *fmt, ...)  __printflike(1, 2);
 #endif
 
 #ifdef	INVARIANTS		/* The option is always available */
 #define	KASSERT(exp,msg) do {						\
 	if (__predict_false(!(exp)))					\
-		kassert_panic msg;						\
+		kassert_panic msg;					\
 } while (0)
 #define	VNASSERT(exp, vp, msg) do {					\
 	if (__predict_false(!(exp))) {					\
 		vn_printf(vp, "VNASSERT failed\n");			\
-		kassert_panic msg;						\
+		kassert_panic msg;					\
 	}								\
 } while (0)
 #else
@@ -125,8 +128,18 @@ void	kassert_panic(const char *fmt, ...)  __printflike(1, 2);
  * Otherwise, the kernel will deadlock since the scheduler isn't
  * going to run the thread that holds any lock we need.
  */
-#define	SCHEDULER_STOPPED() __predict_false(curthread->td_stopsched)
+#define	SCHEDULER_STOPPED_TD(td)  ({					\
+	MPASS((td) == curthread);					\
+	__predict_false((td)->td_stopsched);				\
+})
+#define	SCHEDULER_STOPPED() SCHEDULER_STOPPED_TD(curthread)
 
+/*
+ * Align variables.
+ */
+#define	__read_mostly		__section(".data.read_mostly")
+#define	__exclusive_cache_line	__aligned(CACHE_LINE_SIZE) \
+				    __section(".data.exclusive_cache_line")
 /*
  * XXX the hints declarations are even more misplaced than most declarations
  * in this file, since they are needed in one file (per arch) and only used
@@ -147,10 +160,14 @@ extern char **kenvp;
 extern const void *zero_region;	/* address space maps to a zeroed page	*/
 
 extern int unmapped_buf_allowed;
-extern int iosize_max_clamp;
-extern int devfs_iosize_max_clamp;
-#define	IOSIZE_MAX	(iosize_max_clamp ? INT_MAX : SSIZE_MAX)
-#define	DEVFS_IOSIZE_MAX	(devfs_iosize_max_clamp ? INT_MAX : SSIZE_MAX)
+
+#ifdef __LP64__
+#define	IOSIZE_MAX		iosize_max()
+#define	DEVFS_IOSIZE_MAX	devfs_iosize_max()
+#else
+#define	IOSIZE_MAX		SSIZE_MAX
+#define	DEVFS_IOSIZE_MAX	SSIZE_MAX
+#endif
 
 /*
  * General function declarations.
@@ -184,9 +201,12 @@ void	*hashinit_flags(int count, struct malloc_type *type,
 #define	HASH_WAITOK	0x00000002
 
 void	*phashinit(int count, struct malloc_type *type, u_long *nentries);
+void	*phashinit_flags(int count, struct malloc_type *type, u_long *nentries,
+    int flags);
 void	g_waitidle(void);
 
 void	panic(const char *, ...) __dead2 __printflike(1, 2);
+void	vpanic(const char *, __va_list) __dead2 __printflike(1, 0);
 
 void	cpu_boot(int);
 void	cpu_flush_dcache(void *, size_t);
@@ -205,21 +225,26 @@ int	kvprintf(char const *, void (*)(int, void*), void *, int,
 	    __va_list) __printflike(1, 0);
 void	log(int, const char *, ...) __printflike(2, 3);
 void	log_console(struct uio *);
+void	vlog(int, const char *, __va_list) __printflike(2, 0);
+int	asprintf(char **ret, struct malloc_type *mtp, const char *format, 
+	    ...) __printflike(3, 4);
 int	printf(const char *, ...) __printflike(1, 2);
 int	snprintf(char *, size_t, const char *, ...) __printflike(3, 4);
 int	sprintf(char *buf, const char *, ...) __printflike(2, 3);
 int	uprintf(const char *, ...) __printflike(1, 2);
 int	vprintf(const char *, __va_list) __printflike(1, 0);
+int	vasprintf(char **ret, struct malloc_type *mtp, const char *format,
+	    __va_list ap) __printflike(3, 0);
 int	vsnprintf(char *, size_t, const char *, __va_list) __printflike(3, 0);
 int	vsnrprintf(char *, size_t, int, const char *, __va_list) __printflike(4, 0);
 int	vsprintf(char *buf, const char *, __va_list) __printflike(2, 0);
 int	ttyprintf(struct tty *, const char *, ...) __printflike(2, 3);
-int	sscanf(const char *, char const *, ...) __nonnull(1) __nonnull(2);
-int	vsscanf(const char *, char const *, __va_list) __nonnull(1) __nonnull(2);
-long	strtol(const char *, char **, int) __nonnull(1);
-u_long	strtoul(const char *, char **, int) __nonnull(1);
-quad_t	strtoq(const char *, char **, int) __nonnull(1);
-u_quad_t strtouq(const char *, char **, int) __nonnull(1);
+int	sscanf(const char *, char const * _Nonnull, ...) __scanflike(2, 3);
+int	vsscanf(const char * _Nonnull, char const * _Nonnull, __va_list)  __scanflike(2, 0);
+long	strtol(const char *, char **, int);
+u_long	strtoul(const char *, char **, int);
+quad_t	strtoq(const char *, char **, int);
+u_quad_t strtouq(const char *, char **, int);
 void	tprintf(struct proc *p, int pri, const char *, ...) __printflike(3, 4);
 void	vtprintf(struct proc *, int, const char *, __va_list) __printflike(3, 0);
 void	hexdump(const void *ptr, int length, const char *hdr, int flags);
@@ -230,39 +255,47 @@ void	hexdump(const void *ptr, int length, const char *hdr, int flags);
 #define	HD_OMIT_CHARS	(1 << 18)
 
 #define ovbcopy(f, t, l) bcopy((f), (t), (l))
-void	bcopy(const void *from, void *to, size_t len) __nonnull(1) __nonnull(2);
-void	bzero(void *buf, size_t len) __nonnull(1);
+void	bcopy(const void * _Nonnull from, void * _Nonnull to, size_t len);
+void	bzero(void * _Nonnull buf, size_t len);
+void	explicit_bzero(void * _Nonnull, size_t);
 
-void	*memcpy(void *to, const void *from, size_t len) __nonnull(1) __nonnull(2);
-void	*memmove(void *dest, const void *src, size_t n) __nonnull(1) __nonnull(2);
+void	*memcpy(void * _Nonnull to, const void * _Nonnull from, size_t len);
+void	*memmove(void * _Nonnull dest, const void * _Nonnull src, size_t n);
 
-int	copystr(const void * __restrict kfaddr, void * __restrict kdaddr,
-	    size_t len, size_t * __restrict lencopied)
-	    __nonnull(1) __nonnull(2);
-int	copyinstr(const void * __restrict udaddr, void * __restrict kaddr,
-	    size_t len, size_t * __restrict lencopied)
-	    __nonnull(1) __nonnull(2);
-int	copyin(const void * __restrict udaddr, void * __restrict kaddr,
-	    size_t len) __nonnull(1) __nonnull(2);
-int	copyin_nofault(const void * __restrict udaddr, void * __restrict kaddr,
-	    size_t len) __nonnull(1) __nonnull(2);
-int	copyout(const void * __restrict kaddr, void * __restrict udaddr,
-	    size_t len) __nonnull(1) __nonnull(2);
-int	copyout_nofault(const void * __restrict kaddr, void * __restrict udaddr,
-	    size_t len) __nonnull(1) __nonnull(2);
+int	copystr(const void * _Nonnull __restrict kfaddr,
+	    void * _Nonnull __restrict kdaddr, size_t len,
+	    size_t * __restrict lencopied);
+int	copyinstr(const void * __restrict udaddr,
+	    void * _Nonnull __restrict kaddr, size_t len,
+	    size_t * __restrict lencopied);
+int	copyin(const void * _Nonnull __restrict udaddr,
+	    void * _Nonnull __restrict kaddr, size_t len);
+int	copyin_nofault(const void * _Nonnull __restrict udaddr,
+	    void * _Nonnull __restrict kaddr, size_t len);
+int	copyout(const void * _Nonnull __restrict kaddr,
+	    void * _Nonnull __restrict udaddr, size_t len);
+int	copyout_nofault(const void * _Nonnull __restrict kaddr,
+	    void * _Nonnull __restrict udaddr, size_t len);
 
-int	fubyte(const void *base);
-long	fuword(const void *base);
-int	fuword16(void *base);
-int32_t	fuword32(const void *base);
-int64_t	fuword64(const void *base);
-int	subyte(void *base, int byte);
-int	suword(void *base, long word);
-int	suword16(void *base, int word);
-int	suword32(void *base, int32_t word);
-int	suword64(void *base, int64_t word);
+int	fubyte(volatile const void *base);
+long	fuword(volatile const void *base);
+int	fuword16(volatile const void *base);
+int32_t	fuword32(volatile const void *base);
+int64_t	fuword64(volatile const void *base);
+int	fueword(volatile const void *base, long *val);
+int	fueword32(volatile const void *base, int32_t *val);
+int	fueword64(volatile const void *base, int64_t *val);
+int	subyte(volatile void *base, int byte);
+int	suword(volatile void *base, long word);
+int	suword16(volatile void *base, int word);
+int	suword32(volatile void *base, int32_t word);
+int	suword64(volatile void *base, int64_t word);
 uint32_t casuword32(volatile uint32_t *base, uint32_t oldval, uint32_t newval);
-u_long	 casuword(volatile u_long *p, u_long oldval, u_long newval);
+u_long	casuword(volatile u_long *p, u_long oldval, u_long newval);
+int	casueword32(volatile uint32_t *base, uint32_t oldval, uint32_t *oldvalp,
+	    uint32_t newval);
+int	casueword(volatile u_long *p, u_long oldval, u_long *oldvalp,
+	    u_long newval);
 
 void	realitexpire(void *);
 
@@ -288,23 +321,25 @@ sbintime_t 	cpu_idleclock(void);
 void	cpu_activeclock(void);
 void	cpu_new_callout(int cpu, sbintime_t bt, sbintime_t bt_opt);
 void	cpu_et_frequency(struct eventtimer *et, uint64_t newfreq);
-extern int	cpu_can_deep_sleep;
-extern int	cpu_disable_deep_sleep;
+extern int	cpu_disable_c2_sleep;
+extern int	cpu_disable_c3_sleep;
 
 int	cr_cansee(struct ucred *u1, struct ucred *u2);
 int	cr_canseesocket(struct ucred *cred, struct socket *so);
 int	cr_canseeinpcb(struct ucred *cred, struct inpcb *inp);
 
-char	*getenv(const char *name);
+char	*kern_getenv(const char *name);
 void	freeenv(char *env);
 int	getenv_int(const char *name, int *data);
 int	getenv_uint(const char *name, unsigned int *data);
 int	getenv_long(const char *name, long *data);
 int	getenv_ulong(const char *name, unsigned long *data);
 int	getenv_string(const char *name, char *data, int size);
+int	getenv_int64(const char *name, int64_t *data);
+int	getenv_uint64(const char *name, uint64_t *data);
 int	getenv_quad(const char *name, quad_t *data);
-int	setenv(const char *name, const char *value);
-int	unsetenv(const char *name);
+int	kern_setenv(const char *name, const char *value);
+int	kern_unsetenv(const char *name);
 int	testenv(const char *name);
 
 typedef uint64_t (cpu_tick_f)(void);
@@ -348,23 +383,22 @@ static __inline intrmask_t	splhigh(void)		{ return 0; }
 static __inline intrmask_t	splimp(void)		{ return 0; }
 static __inline intrmask_t	splnet(void)		{ return 0; }
 static __inline intrmask_t	spltty(void)		{ return 0; }
-static __inline intrmask_t	splvm(void)		{ return 0; }
 static __inline void		splx(intrmask_t ipl __unused)	{ return; }
 
 /*
  * Common `proc' functions are declared here so that proc.h can be included
  * less often.
  */
-int	_sleep(void *chan, struct lock_object *lock, int pri, const char *wmesg,
-	   sbintime_t sbt, sbintime_t pr, int flags) __nonnull(1);
+int	_sleep(void * _Nonnull chan, struct lock_object *lock, int pri,
+	   const char *wmesg, sbintime_t sbt, sbintime_t pr, int flags);
 #define	msleep(chan, mtx, pri, wmesg, timo)				\
 	_sleep((chan), &(mtx)->lock_object, (pri), (wmesg),		\
 	    tick_sbt * (timo), 0, C_HARDCLOCK)
 #define	msleep_sbt(chan, mtx, pri, wmesg, bt, pr, flags)		\
 	_sleep((chan), &(mtx)->lock_object, (pri), (wmesg), (bt), (pr),	\
 	    (flags))
-int	msleep_spin_sbt(void *chan, struct mtx *mtx, const char *wmesg,
-	    sbintime_t sbt, sbintime_t pr, int flags) __nonnull(1);
+int	msleep_spin_sbt(void * _Nonnull chan, struct mtx *mtx,
+	    const char *wmesg, sbintime_t sbt, sbintime_t pr, int flags);
 #define	msleep_spin(chan, mtx, wmesg, timo)				\
 	msleep_spin_sbt((chan), (mtx), (wmesg), tick_sbt * (timo),	\
 	    0, C_HARDCLOCK)
@@ -377,8 +411,8 @@ int	pause_sbt(const char *wmesg, sbintime_t sbt, sbintime_t pr,
 	    0, C_HARDCLOCK)
 #define	tsleep_sbt(chan, pri, wmesg, bt, pr, flags)			\
 	_sleep((chan), NULL, (pri), (wmesg), (bt), (pr), (flags))
-void	wakeup(void *chan) __nonnull(1);
-void	wakeup_one(void *chan) __nonnull(1);
+void	wakeup(void * chan);
+void	wakeup_one(void * chan);
 
 /*
  * Common `struct cdev *' stuff are declared here to avoid #include poisoning
@@ -387,6 +421,11 @@ void	wakeup_one(void *chan) __nonnull(1);
 struct cdev;
 dev_t dev2udev(struct cdev *x);
 const char *devtoname(struct cdev *cdev);
+
+#ifdef __LP64__
+size_t	devfs_iosize_max(void);
+size_t	iosize_max(void);
+#endif
 
 int poll_no_poll(int events);
 
@@ -398,7 +437,6 @@ struct root_hold_token;
 
 struct root_hold_token *root_mount_hold(const char *identifier);
 void root_mount_rel(struct root_hold_token *h);
-void root_mount_wait(void);
 int root_mounted(void);
 
 
@@ -416,31 +454,10 @@ int alloc_unr_specific(struct unrhdr *uh, u_int item);
 int alloc_unrl(struct unrhdr *uh);
 void free_unr(struct unrhdr *uh, u_int item);
 
-/*
- * Population count algorithm using SWAR approach
- * - "SIMD Within A Register".
- */
-static __inline uint32_t
-bitcount32(uint32_t x)
-{
+void	intr_prof_stack_use(struct thread *td, struct trapframe *frame);
 
-	x = (x & 0x55555555) + ((x & 0xaaaaaaaa) >> 1);
-	x = (x & 0x33333333) + ((x & 0xcccccccc) >> 2);
-	x = (x + (x >> 4)) & 0x0f0f0f0f;
-	x = (x + (x >> 8));
-	x = (x + (x >> 16)) & 0x000000ff;
-	return (x);
-}
+void counted_warning(unsigned *counter, const char *msg);
 
-static __inline uint16_t
-bitcount16(uint32_t x)
-{
-
-	x = (x & 0x5555) + ((x & 0xaaaa) >> 1);
-	x = (x & 0x3333) + ((x & 0xcccc) >> 2);
-	x = (x + (x >> 4)) & 0x0f0f;
-	x = (x + (x >> 8)) & 0x00ff;
-	return (x);
-}
+__NULLABILITY_PRAGMA_POP
 
 #endif /* !_SYS_SYSTM_H_ */
