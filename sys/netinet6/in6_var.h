@@ -829,4 +829,4 @@ void	in6_rtalloc_ign(struct route_in6 *, u_long, u_int);
 struct rtentry *in6_rtalloc1(struct sockaddr *, int, u_long, u_int);
 #endif /* _KERNEL */
 
-#endif /* _NETINET6_IN6_VAR_H_ */
+#endif /* _NETINET6_IN6_VAR_H_ */ 
