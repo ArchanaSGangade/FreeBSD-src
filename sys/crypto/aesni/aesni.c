@@ -45,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/uio.h>
 #include <sys/mbuf.h>
+#include <sys/mutex.h>
 #include <sys/smp.h>
 #include <crypto/aesni/aesni.h>
 #include <cryptodev_if.h>
@@ -157,7 +158,7 @@ aesni_attach(device_t dev)
 
 	CPU_FOREACH(i) {
 		ctx_fpu[i] = fpu_kern_alloc_ctx(0);
-		mtx_init(&ctx_mtx[i], "anifpumtx", NULL, MTX_DEF|MTX_NEW);
+		mtx_init(&ctx_mtx[i], "anifpumtx", NULL, MTX_DEF);
 	}
 
 	rw_init(&sc->lock, "aesni_lock");
