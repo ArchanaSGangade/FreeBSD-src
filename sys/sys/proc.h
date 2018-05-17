@@ -277,6 +277,7 @@ struct thread {
 	u_int		td_vp_reserv;	/* (k) Count of reserved vnodes. */
 	int		td_no_sleeping;	/* (k) Sleeping disabled count. */
 	int		td_dom_rr_idx;	/* (k) RR Numa domain selection. */
+	int 		td_uretoff;
 #define	td_endzero td_sigmask
 
 /* Copied during fork1() or create_thread(). */
