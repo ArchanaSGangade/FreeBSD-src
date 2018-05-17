@@ -953,3 +953,4 @@ void	nvme_ns_trim_cmd(struct nvme_command *cmd, uint16_t nsid,
 #endif /* _KERNEL */
 
 #endif /* __NVME_H__ */
+ 
