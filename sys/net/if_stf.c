@@ -4,7 +4,7 @@
 /*-
  * Copyright (C) 2000 WIDE Project.
  * Copyright (c) 2010 Hiroki Sato <hrs@FreeBSD.org>
- * Copyright (c) 2013 Ermal Luçi <eri@FreeBSD.org>
+ * Copyright (c) 2013 Ermal LuÃ§i <eri@FreeBSD.org>
  * Copyright (c) 2017 Rubicon Communications, LLC (Netgate)
  * All rights reserved.
  *
@@ -663,7 +663,9 @@ stf_checkaddr4(struct stf_softc *sc, struct in_addr *in, struct ifnet *inifp)
 {
 	struct rm_priotracker in_ifa_tracker;
 	struct in_ifaddr *ia4;
-
+	struct sockaddr *ifp;
+	struct sockaddr *ifa;
+	
 	/*
 	 * reject packets with the following address:
 	 * 224.0.0.0/4 0.0.0.0/8 127.0.0.0/8 255.0.0.0/8
