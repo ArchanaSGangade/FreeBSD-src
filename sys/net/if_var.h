@@ -441,6 +441,7 @@ struct ifaddr {
 	struct	sockaddr *ifa_dstaddr;	/* other end of p-to-p link */
 #define	ifa_broadaddr	ifa_dstaddr	/* broadcast address interface */
 	struct	sockaddr *ifa_netmask;	/* used to determine subnet */
+	struct	sockaddr *ifa_ifp;
 	struct	ifnet *ifa_ifp;		/* back-pointer to interface */
 	struct	carp_softc *ifa_carp;	/* pointer to CARP data */
 	TAILQ_ENTRY(ifaddr) ifa_link;	/* queue macro glue */
