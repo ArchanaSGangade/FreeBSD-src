@@ -1470,8 +1470,7 @@ int
 freebsd32_lseek(struct thread *td, struct freebsd32_lseek_args *uap)
 {
 	int error;
-	struct lseek_args ap;
-	off_t pos; 
+	off_t pos;
 
 	error = kern_lseek(td, uap->fd, PAIR32TO64(off_t, uap->offset),
 	    uap->whence);
