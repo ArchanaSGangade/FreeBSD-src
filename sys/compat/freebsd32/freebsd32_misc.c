@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002 Doug Rabson
  * All rights reserved.
  *
@@ -27,11 +29,15 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_compat.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_ktrace.h"
 
 #define __ELF_WORD_SIZE 32
+
+#ifdef COMPAT_FREEBSD11
+#define	_WANT_FREEBSD11_KEVENT
+#endif
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -83,6 +89,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/msg.h>
 #include <sys/sem.h>
 #include <sys/shm.h>
+#ifdef KTRACE
+#include <sys/ktrace.h>
+#endif
 
 #ifdef INET
 #include <netinet/in.h>
@@ -109,21 +118,27 @@ __FBSDID("$FreeBSD$");
 
 FEATURE(compat_freebsd_32bit, "Compatible with 32-bit FreeBSD");
 
-#ifndef __mips__
+#ifdef __amd64__
 CTASSERT(sizeof(struct timeval32) == 8);
 CTASSERT(sizeof(struct timespec32) == 8);
 CTASSERT(sizeof(struct itimerval32) == 16);
+CTASSERT(sizeof(struct bintime32) == 12);
 #endif
 CTASSERT(sizeof(struct statfs32) == 256);
-#ifndef __mips__
+#ifdef __amd64__
 CTASSERT(sizeof(struct rusage32) == 72);
 #endif
 CTASSERT(sizeof(struct sigaltstack32) == 12);
-CTASSERT(sizeof(struct kevent32) == 20);
+#ifdef __amd64__
+CTASSERT(sizeof(struct kevent32) == 56);
+#else
+CTASSERT(sizeof(struct kevent32) == 64);
+#endif
 CTASSERT(sizeof(struct iovec32) == 8);
 CTASSERT(sizeof(struct msghdr32) == 28);
-#ifndef __mips__
-CTASSERT(sizeof(struct stat32) == 96);
+#ifdef __amd64__
+CTASSERT(sizeof(struct stat32) == 208);
+CTASSERT(sizeof(struct freebsd11_stat32) == 96);
 #endif
 CTASSERT(sizeof(struct sigaction32) == 24);
 
@@ -448,6 +463,26 @@ freebsd32_fexecve(struct thread *td, struct freebsd32_fexecve_args *uap)
 	return (error);
 }
 
+#if defined(COMPAT_FREEBSD11)
+int
+freebsd11_freebsd32_mknod(struct thread *td,
+    struct freebsd11_freebsd32_mknod_args *uap)
+{
+
+	return (kern_mknodat(td, AT_FDCWD, uap->path, UIO_USERSPACE, uap->mode,
+	    uap->dev));
+}
+
+int
+freebsd11_freebsd32_mknodat(struct thread *td,
+    struct freebsd11_freebsd32_mknodat_args *uap)
+{
+
+	return (kern_mknodat(td, uap->fd, uap->path, UIO_USERSPACE, uap->mode,
+	    uap->dev));
+}
+#endif /* COMPAT_FREEBSD11 */
+
 int
 freebsd32_mprotect(struct thread *td, struct freebsd32_mprotect_args *uap)
 {
@@ -599,10 +634,134 @@ freebsd32_kevent_copyout(void *arg, struct kevent *kevp, int count)
 {
 	struct freebsd32_kevent_args *uap;
 	struct kevent32	ks32[KQ_NEVENTS];
-	int i, error = 0;
+	uint64_t e;
+	int i, j, error;
 
 	KASSERT(count <= KQ_NEVENTS, ("count (%d) > KQ_NEVENTS", count));
 	uap = (struct freebsd32_kevent_args *)arg;
+
+	for (i = 0; i < count; i++) {
+		CP(kevp[i], ks32[i], ident);
+		CP(kevp[i], ks32[i], filter);
+		CP(kevp[i], ks32[i], flags);
+		CP(kevp[i], ks32[i], fflags);
+#if BYTE_ORDER == LITTLE_ENDIAN
+		ks32[i].data1 = kevp[i].data;
+		ks32[i].data2 = kevp[i].data >> 32;
+#else
+		ks32[i].data1 = kevp[i].data >> 32;
+		ks32[i].data2 = kevp[i].data;
+#endif
+		PTROUT_CP(kevp[i], ks32[i], udata);
+		for (j = 0; j < nitems(kevp->ext); j++) {
+			e = kevp[i].ext[j];
+#if BYTE_ORDER == LITTLE_ENDIAN
+			ks32[i].ext64[2 * j] = e;
+			ks32[i].ext64[2 * j + 1] = e >> 32;
+#else
+			ks32[i].ext64[2 * j] = e >> 32;
+			ks32[i].ext64[2 * j + 1] = e;
+#endif
+		}
+	}
+	error = copyout(ks32, uap->eventlist, count * sizeof *ks32);
+	if (error == 0)
+		uap->eventlist += count;
+	return (error);
+}
+
+/*
+ * Copy 'count' items from the list pointed to by uap->changelist.
+ */
+static int
+freebsd32_kevent_copyin(void *arg, struct kevent *kevp, int count)
+{
+	struct freebsd32_kevent_args *uap;
+	struct kevent32	ks32[KQ_NEVENTS];
+	uint64_t e;
+	int i, j, error;
+
+	KASSERT(count <= KQ_NEVENTS, ("count (%d) > KQ_NEVENTS", count));
+	uap = (struct freebsd32_kevent_args *)arg;
+
+	error = copyin(uap->changelist, ks32, count * sizeof *ks32);
+	if (error)
+		goto done;
+	uap->changelist += count;
+
+	for (i = 0; i < count; i++) {
+		CP(ks32[i], kevp[i], ident);
+		CP(ks32[i], kevp[i], filter);
+		CP(ks32[i], kevp[i], flags);
+		CP(ks32[i], kevp[i], fflags);
+		kevp[i].data = PAIR32TO64(uint64_t, ks32[i].data);
+		PTRIN_CP(ks32[i], kevp[i], udata);
+		for (j = 0; j < nitems(kevp->ext); j++) {
+#if BYTE_ORDER == LITTLE_ENDIAN
+			e = ks32[i].ext64[2 * j + 1];
+			e <<= 32;
+			e += ks32[i].ext64[2 * j];
+#else
+			e = ks32[i].ext64[2 * j];
+			e <<= 32;
+			e += ks32[i].ext64[2 * j + 1];
+#endif
+			kevp[i].ext[j] = e;
+		}
+	}
+done:
+	return (error);
+}
+
+int
+freebsd32_kevent(struct thread *td, struct freebsd32_kevent_args *uap)
+{
+	struct timespec32 ts32;
+	struct timespec ts, *tsp;
+	struct kevent_copyops k_ops = {
+		.arg = uap,
+		.k_copyout = freebsd32_kevent_copyout,
+		.k_copyin = freebsd32_kevent_copyin,
+	};
+#ifdef KTRACE
+	struct kevent32 *eventlist = uap->eventlist;
+#endif
+	int error;
+
+	if (uap->timeout) {
+		error = copyin(uap->timeout, &ts32, sizeof(ts32));
+		if (error)
+			return (error);
+		CP(ts32, ts, tv_sec);
+		CP(ts32, ts, tv_nsec);
+		tsp = &ts;
+	} else
+		tsp = NULL;
+#ifdef KTRACE
+	if (KTRPOINT(td, KTR_STRUCT_ARRAY))
+		ktrstructarray("kevent32", UIO_USERSPACE, uap->changelist,
+		    uap->nchanges, sizeof(struct kevent32));
+#endif
+	error = kern_kevent(td, uap->fd, uap->nchanges, uap->nevents,
+	    &k_ops, tsp);
+#ifdef KTRACE
+	if (error == 0 && KTRPOINT(td, KTR_STRUCT_ARRAY))
+		ktrstructarray("kevent32", UIO_USERSPACE, eventlist,
+		    td->td_retval[0], sizeof(struct kevent32));
+#endif
+	return (error);
+}
+
+#ifdef COMPAT_FREEBSD11
+static int
+freebsd32_kevent11_copyout(void *arg, struct kevent *kevp, int count)
+{
+	struct freebsd11_freebsd32_kevent_args *uap;
+	struct kevent32_freebsd11 ks32[KQ_NEVENTS];
+	int i, error;
+
+	KASSERT(count <= KQ_NEVENTS, ("count (%d) > KQ_NEVENTS", count));
+	uap = (struct freebsd11_freebsd32_kevent_args *)arg;
 
 	for (i = 0; i < count; i++) {
 		CP(kevp[i], ks32[i], ident);
@@ -622,14 +781,14 @@ freebsd32_kevent_copyout(void *arg, struct kevent *kevp, int count)
  * Copy 'count' items from the list pointed to by uap->changelist.
  */
 static int
-freebsd32_kevent_copyin(void *arg, struct kevent *kevp, int count)
+freebsd32_kevent11_copyin(void *arg, struct kevent *kevp, int count)
 {
-	struct freebsd32_kevent_args *uap;
-	struct kevent32	ks32[KQ_NEVENTS];
-	int i, error = 0;
+	struct freebsd11_freebsd32_kevent_args *uap;
+	struct kevent32_freebsd11 ks32[KQ_NEVENTS];
+	int i, j, error;
 
 	KASSERT(count <= KQ_NEVENTS, ("count (%d) > KQ_NEVENTS", count));
-	uap = (struct freebsd32_kevent_args *)arg;
+	uap = (struct freebsd11_freebsd32_kevent_args *)arg;
 
 	error = copyin(uap->changelist, ks32, count * sizeof *ks32);
 	if (error)
@@ -643,23 +802,28 @@ freebsd32_kevent_copyin(void *arg, struct kevent *kevp, int count)
 		CP(ks32[i], kevp[i], fflags);
 		CP(ks32[i], kevp[i], data);
 		PTRIN_CP(ks32[i], kevp[i], udata);
+		for (j = 0; j < nitems(kevp->ext); j++)
+			kevp[i].ext[j] = 0;
 	}
 done:
 	return (error);
 }
 
 int
-freebsd32_kevent(struct thread *td, struct freebsd32_kevent_args *uap)
+freebsd11_freebsd32_kevent(struct thread *td,
+    struct freebsd11_freebsd32_kevent_args *uap)
 {
 	struct timespec32 ts32;
 	struct timespec ts, *tsp;
 	struct kevent_copyops k_ops = {
 		.arg = uap,
-		.k_copyout = freebsd32_kevent_copyout,
-		.k_copyin = freebsd32_kevent_copyin,
+		.k_copyout = freebsd32_kevent11_copyout,
+		.k_copyin = freebsd32_kevent11_copyin,
 	};
+#ifdef KTRACE
+	struct kevent32_freebsd11 *eventlist = uap->eventlist;
+#endif
 	int error;
-
 
 	if (uap->timeout) {
 		error = copyin(uap->timeout, &ts32, sizeof(ts32));
@@ -670,10 +834,23 @@ freebsd32_kevent(struct thread *td, struct freebsd32_kevent_args *uap)
 		tsp = &ts;
 	} else
 		tsp = NULL;
+#ifdef KTRACE
+	if (KTRPOINT(td, KTR_STRUCT_ARRAY))
+		ktrstructarray("kevent32_freebsd11", UIO_USERSPACE,
+		    uap->changelist, uap->nchanges,
+		    sizeof(struct kevent32_freebsd11));
+#endif
 	error = kern_kevent(td, uap->fd, uap->nchanges, uap->nevents,
 	    &k_ops, tsp);
+#ifdef KTRACE
+	if (error == 0 && KTRPOINT(td, KTR_STRUCT_ARRAY))
+		ktrstructarray("kevent32_freebsd11", UIO_USERSPACE,
+		    eventlist, td->td_retval[0],
+		    sizeof(struct kevent32_freebsd11));
+#endif
 	return (error);
 }
+#endif
 
 int
 freebsd32_gettimeofday(struct thread *td,
@@ -887,12 +1064,67 @@ freebsd32_copyoutmsghdr(struct msghdr *msg, struct msghdr32 *msg32)
 
 #define	FREEBSD32_CMSG_DATA(cmsg)	((unsigned char *)(cmsg) + \
 				 FREEBSD32_ALIGN(sizeof(struct cmsghdr)))
+
+static size_t
+freebsd32_cmsg_convert(struct cmsghdr *cm, void *data, socklen_t datalen)
+{
+	size_t copylen;
+	union {
+		struct timespec32 ts;
+		struct timeval32 tv;
+		struct bintime32 bt;
+	} tmp32;
+
+	union {
+		struct timespec ts;
+		struct timeval tv;
+		struct bintime bt;
+	} *in;
+
+	in = data;
+	copylen = 0;
+	switch (cm->cmsg_level) {
+	case SOL_SOCKET:
+		switch (cm->cmsg_type) {
+		case SCM_TIMESTAMP:
+			TV_CP(*in, tmp32, tv);
+			copylen = sizeof(tmp32.tv);
+			break;
+
+		case SCM_BINTIME:
+			BT_CP(*in, tmp32, bt);
+			copylen = sizeof(tmp32.bt);
+			break;
+
+		case SCM_REALTIME:
+		case SCM_MONOTONIC:
+			TS_CP(*in, tmp32, ts);
+			copylen = sizeof(tmp32.ts);
+			break;
+
+		default:
+			break;
+		}
+
+	default:
+		break;
+	}
+
+	if (copylen == 0)
+		return (datalen);
+
+	KASSERT((datalen >= copylen), ("corrupted cmsghdr"));
+
+	bcopy(&tmp32, data, copylen);
+	return (copylen);
+}
+
 static int
 freebsd32_copy_msg_out(struct msghdr *msg, struct mbuf *control)
 {
 	struct cmsghdr *cm;
 	void *data;
-	socklen_t clen, datalen;
+	socklen_t clen, datalen, datalen_out;
 	int error;
 	caddr_t ctlbuf;
 	int len, maxlen, copylen;
@@ -916,15 +1148,15 @@ freebsd32_copy_msg_out(struct msghdr *msg, struct mbuf *control)
 			    cm->cmsg_len > clen) {
 				error = EINVAL;
 				break;
-			}	
+			}
 
 			data   = CMSG_DATA(cm);
 			datalen = (caddr_t)cm + cm->cmsg_len - (caddr_t)data;
+			datalen_out = freebsd32_cmsg_convert(cm, data, datalen);
 
 			/* Adjust message length */
 			cm->cmsg_len = FREEBSD32_ALIGN(sizeof(struct cmsghdr)) +
-			    datalen;
-
+			    datalen_out;
 
 			/* Copy cmsghdr */
 			copylen = sizeof(struct cmsghdr);
@@ -933,7 +1165,7 @@ freebsd32_copy_msg_out(struct msghdr *msg, struct mbuf *control)
 				copylen = len;
 			}
 
-			error = copyout(cm,ctlbuf,copylen);
+			error = copyout(cm, ctlbuf, copylen);
 			if (error)
 				goto exit;
 
@@ -944,13 +1176,13 @@ freebsd32_copy_msg_out(struct msghdr *msg, struct mbuf *control)
 				break;
 
 			/* Copy data */
-			copylen = datalen;
+			copylen = datalen_out;
 			if (len < copylen) {
 				msg->msg_flags |= MSG_CTRUNC;
 				copylen = len;
 			}
 
-			error = copyout(data,ctlbuf,copylen);
+			error = copyout(data, ctlbuf, copylen);
 			if (error)
 				goto exit;
 
@@ -1519,16 +1751,17 @@ ofreebsd32_getdirentries(struct thread *td,
 }
 #endif
 
+#if defined(COMPAT_FREEBSD11)
 int
-freebsd32_getdirentries(struct thread *td,
-    struct freebsd32_getdirentries_args *uap)
+freebsd11_freebsd32_getdirentries(struct thread *td,
+    struct freebsd11_freebsd32_getdirentries_args *uap)
 {
 	long base;
 	int32_t base32;
 	int error;
 
-	error = kern_getdirentries(td, uap->fd, uap->buf, uap->count, &base,
-	    NULL, UIO_USERSPACE);
+	error = freebsd11_kern_getdirentries(td, uap->fd, uap->buf, uap->count,
+	    &base, NULL);
 	if (error)
 		return (error);
 	if (uap->basep != NULL) {
@@ -1537,6 +1770,20 @@ freebsd32_getdirentries(struct thread *td,
 	}
 	return (error);
 }
+
+int
+freebsd11_freebsd32_getdents(struct thread *td,
+    struct freebsd11_freebsd32_getdents_args *uap)
+{
+	struct freebsd11_freebsd32_getdirentries_args ap;
+
+	ap.fd = uap->fd;
+	ap.buf = uap->buf;
+	ap.count = uap->count;
+	ap.basep = NULL;
+	return (freebsd11_freebsd32_getdirentries(td, &ap));
+}
+#endif /* COMPAT_FREEBSD11 */
 
 #ifdef COMPAT_FREEBSD6
 /* versions with the 'int pad' argument */
@@ -1709,6 +1956,15 @@ copy_stat(struct stat *in, struct stat32 *out)
 	CP(*in, *out, st_flags);
 	CP(*in, *out, st_gen);
 	TS_CP(*in, *out, st_birthtim);
+	out->st_padding0 = 0;
+	out->st_padding1 = 0;
+#ifdef __STAT32_TIME_T_EXT
+	out->st_atim_ext = 0;
+	out->st_mtim_ext = 0;
+	out->st_ctim_ext = 0;
+	out->st_btim_ext = 0;
+#endif
+	bzero(out->st_spare, sizeof(out->st_spare));
 }
 
 #ifdef COMPAT_43
@@ -1733,22 +1989,6 @@ copy_ostat(struct stat *in, struct ostat32 *out)
 	CP(*in, *out, st_gen);
 }
 #endif
-
-int
-freebsd32_stat(struct thread *td, struct freebsd32_stat_args *uap)
-{
-	struct stat sb;
-	struct stat32 sb32;
-	int error;
-
-	error = kern_statat(td, 0, AT_FDCWD, uap->path, UIO_USERSPACE,
-	    &sb, NULL);
-	if (error)
-		return (error);
-	copy_stat(&sb, &sb32);
-	error = copyout(&sb32, uap->ub, sizeof (sb32));
-	return (error);
-}
 
 #ifdef COMPAT_43
 int
@@ -1816,22 +2056,6 @@ freebsd32_fstatat(struct thread *td, struct freebsd32_fstatat_args *uap)
 	return (error);
 }
 
-int
-freebsd32_lstat(struct thread *td, struct freebsd32_lstat_args *uap)
-{
-	struct stat sb;
-	struct stat32 sb32;
-	int error;
-
-	error = kern_statat(td, AT_SYMLINK_NOFOLLOW, AT_FDCWD, uap->path,
-	    UIO_USERSPACE, &sb, NULL);
-	if (error)
-		return (error);
-	copy_stat(&sb, &sb32);
-	error = copyout(&sb32, uap->ub, sizeof (sb32));
-	return (error);
-}
-
 #ifdef COMPAT_43
 int
 ofreebsd32_lstat(struct thread *td, struct ofreebsd32_lstat_args *uap)
@@ -1846,6 +2070,172 @@ ofreebsd32_lstat(struct thread *td, struct ofreebsd32_lstat_args *uap)
 		return (error);
 	copy_ostat(&sb, &sb32);
 	error = copyout(&sb32, uap->ub, sizeof (sb32));
+	return (error);
+}
+#endif
+
+int
+freebsd32_fhstat(struct thread *td, struct freebsd32_fhstat_args *uap)
+{
+	struct stat sb;
+	struct stat32 sb32;
+	struct fhandle fh;
+	int error;
+
+	error = copyin(uap->u_fhp, &fh, sizeof(fhandle_t));
+        if (error != 0)
+                return (error);
+	error = kern_fhstat(td, fh, &sb);
+	if (error != 0)
+		return (error);
+	copy_stat(&sb, &sb32);
+	error = copyout(&sb32, uap->sb, sizeof (sb32));
+	return (error);
+}
+
+#if defined(COMPAT_FREEBSD11)
+extern int ino64_trunc_error;
+
+static int
+freebsd11_cvtstat32(struct stat *in, struct freebsd11_stat32 *out)
+{
+
+	CP(*in, *out, st_ino);
+	if (in->st_ino != out->st_ino) {
+		switch (ino64_trunc_error) {
+		default:
+		case 0:
+			break;
+		case 1:
+			return (EOVERFLOW);
+		case 2:
+			out->st_ino = UINT32_MAX;
+			break;
+		}
+	}
+	CP(*in, *out, st_nlink);
+	if (in->st_nlink != out->st_nlink) {
+		switch (ino64_trunc_error) {
+		default:
+		case 0:
+			break;
+		case 1:
+			return (EOVERFLOW);
+		case 2:
+			out->st_nlink = UINT16_MAX;
+			break;
+		}
+	}
+	CP(*in, *out, st_dev);
+	CP(*in, *out, st_mode);
+	CP(*in, *out, st_uid);
+	CP(*in, *out, st_gid);
+	CP(*in, *out, st_rdev);
+	TS_CP(*in, *out, st_atim);
+	TS_CP(*in, *out, st_mtim);
+	TS_CP(*in, *out, st_ctim);
+	CP(*in, *out, st_size);
+	CP(*in, *out, st_blocks);
+	CP(*in, *out, st_blksize);
+	CP(*in, *out, st_flags);
+	CP(*in, *out, st_gen);
+	TS_CP(*in, *out, st_birthtim);
+	out->st_lspare = 0;
+	bzero((char *)&out->st_birthtim + sizeof(out->st_birthtim),
+	    sizeof(*out) - offsetof(struct freebsd11_stat32,
+	    st_birthtim) - sizeof(out->st_birthtim));
+	return (0);
+}
+
+int
+freebsd11_freebsd32_stat(struct thread *td,
+    struct freebsd11_freebsd32_stat_args *uap)
+{
+	struct stat sb;
+	struct freebsd11_stat32 sb32;
+	int error;
+
+	error = kern_statat(td, 0, AT_FDCWD, uap->path, UIO_USERSPACE,
+	    &sb, NULL);
+	if (error != 0)
+		return (error);
+	error = freebsd11_cvtstat32(&sb, &sb32);
+	if (error == 0)
+		error = copyout(&sb32, uap->ub, sizeof (sb32));
+	return (error);
+}
+
+int
+freebsd11_freebsd32_fstat(struct thread *td,
+    struct freebsd11_freebsd32_fstat_args *uap)
+{
+	struct stat sb;
+	struct freebsd11_stat32 sb32;
+	int error;
+
+	error = kern_fstat(td, uap->fd, &sb);
+	if (error != 0)
+		return (error);
+	error = freebsd11_cvtstat32(&sb, &sb32);
+	if (error == 0)
+		error = copyout(&sb32, uap->ub, sizeof (sb32));
+	return (error);
+}
+
+int
+freebsd11_freebsd32_fstatat(struct thread *td,
+    struct freebsd11_freebsd32_fstatat_args *uap)
+{
+	struct stat sb;
+	struct freebsd11_stat32 sb32;
+	int error;
+
+	error = kern_statat(td, uap->flag, uap->fd, uap->path, UIO_USERSPACE,
+	    &sb, NULL);
+	if (error != 0)
+		return (error);
+	error = freebsd11_cvtstat32(&sb, &sb32);
+	if (error == 0)
+		error = copyout(&sb32, uap->buf, sizeof (sb32));
+	return (error);
+}
+
+int
+freebsd11_freebsd32_lstat(struct thread *td,
+    struct freebsd11_freebsd32_lstat_args *uap)
+{
+	struct stat sb;
+	struct freebsd11_stat32 sb32;
+	int error;
+
+	error = kern_statat(td, AT_SYMLINK_NOFOLLOW, AT_FDCWD, uap->path,
+	    UIO_USERSPACE, &sb, NULL);
+	if (error != 0)
+		return (error);
+	error = freebsd11_cvtstat32(&sb, &sb32);
+	if (error == 0)
+		error = copyout(&sb32, uap->ub, sizeof (sb32));
+	return (error);
+}
+
+int
+freebsd11_freebsd32_fhstat(struct thread *td,
+    struct freebsd11_freebsd32_fhstat_args *uap)
+{
+	struct stat sb;
+	struct freebsd11_stat32 sb32;
+	struct fhandle fh;
+	int error;
+
+	error = copyin(uap->u_fhp, &fh, sizeof(fhandle_t));
+        if (error != 0)
+                return (error);
+	error = kern_fhstat(td, fh, &sb);
+	if (error != 0)
+		return (error);
+	error = freebsd11_cvtstat32(&sb, &sb32);
+	if (error == 0)
+		error = copyout(&sb32, uap->sb, sizeof (sb32));
 	return (error);
 }
 #endif
@@ -1873,7 +2263,7 @@ freebsd32_sysctl(struct thread *td, struct freebsd32_sysctl_args *uap)
 	error = userland_sysctl(td, name, uap->namelen,
 		uap->old, &oldlen, 1,
 		uap->new, uap->newlen, &j, SCTL_MASK32);
-	if (error && error != ENOMEM)
+	if (error)
 		return (error);
 	if (uap->oldlenp)
 		suword32(uap->oldlenp, j);
@@ -2607,6 +2997,24 @@ freebsd32_cpuset_setaffinity(struct thread *td,
 }
 
 int
+freebsd32_cpuset_getdomain(struct thread *td,
+    struct freebsd32_cpuset_getdomain_args *uap)
+{
+
+	return (kern_cpuset_getdomain(td, uap->level, uap->which,
+	    PAIR32TO64(id_t,uap->id), uap->domainsetsize, uap->mask, uap->policy));
+}
+
+int
+freebsd32_cpuset_setdomain(struct thread *td,
+    struct freebsd32_cpuset_setdomain_args *uap)
+{
+
+	return (kern_cpuset_setdomain(td, uap->level, uap->which,
+	    PAIR32TO64(id_t,uap->id), uap->domainsetsize, uap->mask, uap->policy));
+}
+
+int
 freebsd32_nmount(struct thread *td,
     struct freebsd32_nmount_args /* {
     	struct iovec *iovp;
@@ -2680,120 +3088,24 @@ freebsd32_xxx(struct thread *td, struct freebsd32_xxx_args *uap)
 #endif
 
 int
-syscall32_register(int *offset, struct sysent *new_sysent,
-    struct sysent *old_sysent, int flags)
-{
-
-	if ((flags & ~SY_THR_STATIC) != 0)
-		return (EINVAL);
-
-	if (*offset == NO_SYSCALL) {
-		int i;
-
-		for (i = 1; i < SYS_MAXSYSCALL; ++i)
-			if (freebsd32_sysent[i].sy_call ==
-			    (sy_call_t *)lkmnosys)
-				break;
-		if (i == SYS_MAXSYSCALL)
-			return (ENFILE);
-		*offset = i;
-	} else if (*offset < 0 || *offset >= SYS_MAXSYSCALL)
-		return (EINVAL);
-	else if (freebsd32_sysent[*offset].sy_call != (sy_call_t *)lkmnosys &&
-	    freebsd32_sysent[*offset].sy_call != (sy_call_t *)lkmressys)
-		return (EEXIST);
-
-	*old_sysent = freebsd32_sysent[*offset];
-	freebsd32_sysent[*offset] = *new_sysent;
-	atomic_store_rel_32(&freebsd32_sysent[*offset].sy_thrcnt, flags);
-	return (0);
-}
-
-int
-syscall32_deregister(int *offset, struct sysent *old_sysent)
-{
-
-	if (*offset == 0)
-		return (0);
-
-	freebsd32_sysent[*offset] = *old_sysent;
-	return (0);
-}
-
-int
 syscall32_module_handler(struct module *mod, int what, void *arg)
 {
-	struct syscall_module_data *data = (struct syscall_module_data*)arg;
-	modspecific_t ms;
-	int error;
 
-	switch (what) {
-	case MOD_LOAD:
-		error = syscall32_register(data->offset, data->new_sysent,
-		    &data->old_sysent, SY_THR_STATIC_KLD);
-		if (error) {
-			/* Leave a mark so we know to safely unload below. */
-			data->offset = NULL;
-			return error;
-		}
-		ms.intval = *data->offset;
-		MOD_XLOCK;
-		module_setspecific(mod, &ms);
-		MOD_XUNLOCK;
-		if (data->chainevh)
-			error = data->chainevh(mod, what, data->chainarg);
-		return (error);
-	case MOD_UNLOAD:
-		/*
-		 * MOD_LOAD failed, so just return without calling the
-		 * chained handler since we didn't pass along the MOD_LOAD
-		 * event.
-		 */
-		if (data->offset == NULL)
-			return (0);
-		if (data->chainevh) {
-			error = data->chainevh(mod, what, data->chainarg);
-			if (error)
-				return (error);
-		}
-		error = syscall32_deregister(data->offset, &data->old_sysent);
-		return (error);
-	default:
-		error = EOPNOTSUPP;
-		if (data->chainevh)
-			error = data->chainevh(mod, what, data->chainarg);
-		return (error);
-	}
+	return (kern_syscall_module_handler(freebsd32_sysent, mod, what, arg));
 }
 
 int
 syscall32_helper_register(struct syscall_helper_data *sd, int flags)
 {
-	struct syscall_helper_data *sd1;
-	int error;
 
-	for (sd1 = sd; sd1->syscall_no != NO_SYSCALL; sd1++) {
-		error = syscall32_register(&sd1->syscall_no, &sd1->new_sysent,
-		    &sd1->old_sysent, flags);
-		if (error != 0) {
-			syscall32_helper_unregister(sd);
-			return (error);
-		}
-		sd1->registered = 1;
-	}
-	return (0);
+	return (kern_syscall_helper_register(freebsd32_sysent, sd, flags));
 }
 
 int
 syscall32_helper_unregister(struct syscall_helper_data *sd)
 {
-	struct syscall_helper_data *sd1;
 
-	for (sd1 = sd; sd1->registered != 0; sd1++) {
-		syscall32_deregister(&sd1->syscall_no, &sd1->old_sysent);
-		sd1->registered = 0;
-	}
-	return (0);
+	return (kern_syscall_helper_unregister(freebsd32_sysent, sd));
 }
 
 register_t *
@@ -2868,33 +3180,21 @@ freebsd32_copyout_strings(struct image_params *imgp)
 	destp -= ARG_MAX - imgp->args->stringspace;
 	destp = rounddown2(destp, sizeof(uint32_t));
 
-	/*
-	 * If we have a valid auxargs ptr, prepare some room
-	 * on the stack.
-	 */
+	vectp = (uint32_t *)destp;
 	if (imgp->auxargs) {
 		/*
-		 * 'AT_COUNT*2' is size for the ELF Auxargs data. This is for
-		 * lower compatibility.
+		 * Allocate room on the stack for the ELF auxargs
+		 * array.  It has up to AT_COUNT entries.
 		 */
-		imgp->auxarg_size = (imgp->auxarg_size) ? imgp->auxarg_size
-			: (AT_COUNT * 2);
-		/*
-		 * The '+ 2' is for the null pointers at the end of each of
-		 * the arg and env vector sets,and imgp->auxarg_size is room
-		 * for argument of Runtime loader.
-		 */
-		vectp = (u_int32_t *) (destp - (imgp->args->argc +
-		    imgp->args->envc + 2 + imgp->auxarg_size + execpath_len) *
-		    sizeof(u_int32_t));
-	} else {
-		/*
-		 * The '+ 2' is for the null pointers at the end of each of
-		 * the arg and env vector sets
-		 */
-		vectp = (u_int32_t *)(destp - (imgp->args->argc +
-		    imgp->args->envc + 2) * sizeof(u_int32_t));
+		vectp -= howmany(AT_COUNT * sizeof(Elf32_Auxinfo),
+		    sizeof(*vectp));
 	}
+
+	/*
+	 * Allocate room for the argv[] and env vectors including the
+	 * terminating NULL pointers.
+	 */
+	vectp -= imgp->args->argc + 1 + imgp->args->envc + 1;
 
 	/*
 	 * vectp also becomes our initial stack base
@@ -2972,6 +3272,7 @@ freebsd32_kldstat(struct thread *td, struct freebsd32_kldstat_args *uap)
 		CP(*stat, *stat32, size);
 		bcopy(&stat->pathname[0], &stat32->pathname[0],
 		    sizeof(stat->pathname));
+		stat32->version  = version;
 		error = copyout(stat32, uap->stat, version);
 	}
 	free(stat, M_TEMP);
@@ -3039,7 +3340,7 @@ freebsd32_procctl(struct thread *td, struct freebsd32_procctl_args *uap)
 	union {
 		struct procctl_reaper_pids32 rp;
 	} x32;
-	int error, error1, flags;
+	int error, error1, flags, signum;
 
 	switch (uap->com) {
 	case PROC_SPROTECT:
@@ -3077,6 +3378,15 @@ freebsd32_procctl(struct thread *td, struct freebsd32_procctl_args *uap)
 	case PROC_TRAPCAP_STATUS:
 		data = &flags;
 		break;
+	case PROC_PDEATHSIG_CTL:
+		error = copyin(uap->data, &signum, sizeof(signum));
+		if (error != 0)
+			return (error);
+		data = &signum;
+		break;
+	case PROC_PDEATHSIG_STATUS:
+		data = &signum;
+		break;
 	default:
 		return (EINVAL);
 	}
@@ -3096,6 +3406,10 @@ freebsd32_procctl(struct thread *td, struct freebsd32_procctl_args *uap)
 	case PROC_TRAPCAP_STATUS:
 		if (error == 0)
 			error = copyout(&flags, uap->data, sizeof(flags));
+		break;
+	case PROC_PDEATHSIG_STATUS:
+		if (error == 0)
+			error = copyout(&signum, uap->data, sizeof(signum));
 		break;
 	}
 	return (error);
