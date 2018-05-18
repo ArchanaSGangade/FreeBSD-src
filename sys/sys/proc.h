@@ -301,13 +301,7 @@ struct thread {
 		TDS_CAN_RUN,
 		TDS_RUNQ,
 		TDS_RUNNING
-	} td_state;			/* (t) thread state */
-	 union {
-                register_t      tdu_retval[2];
-                off_t           tdu_off;        
-                off_t           tdu_off;
-        } td_uretoff;                   /* (k) Syscall aux returns. */
- #define td_retval      td_uretoff.tdu_retval
+	} td_state;			/* (t) thread state */ 
         u_int           td_cowgen;      /* (k) Generation of COW pointers. */
 	register_t	td_retval[2];	/* (k) Syscall aux returns. */
 	struct callout	td_slpcallout;	/* (h) Callout for sleep. */
